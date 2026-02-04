@@ -7,7 +7,7 @@ export default {
     }
 
     const uuid = env.UUID;
-    const path = env.VLESS_WSPATH || "/vless";
+    const path = "/vless";
 
     const url = new URL(request.url);
     if (url.pathname !== path) {

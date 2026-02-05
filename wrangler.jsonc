@@ -1,5 +1,5 @@
 {
-  "name": "v2ray-worker",
-  "compatibility_date": "2026-02-04",
-  "main": "index.js"
+  "name": "vless-worker",
+  "main": "worker.js",
+  "compatibility_date": "2025-01-01"
 }

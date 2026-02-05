@@ -1,6 +1,6 @@
 import { connect } from "cloudflare:sockets";
 
-const UUID = "PUT-YOUR-UUID-HERE";
+const UUID = "de04add9-5c68-8bab-950c-08cd5320df18";
 const WS_PATH = "/vless";
 
 export default {

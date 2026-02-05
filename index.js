@@ -1,16 +1,17 @@
 import { connect } from "cloudflare:sockets";
 
+const UUID = "PUT-YOUR-UUID-HERE";
+const WS_PATH = "/vless";
+
 export default {
-  async fetch(request, env) {
+  async fetch(request) {
+    const url = new URL(request.url);
+
     if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("VLESS Worker Running ✅", { status: 200 });
+      return new Response("VLESS Worker OK", { status: 200 });
     }
 
-    const uuid = env.UUID;
-    const path = "/vless";
-
-    const url = new URL(request.url);
-    if (url.pathname !== path) {
+    if (url.pathname !== WS_PATH) {
       return new Response("Wrong path", { status: 404 });
     }
 
@@ -18,87 +19,82 @@ export default {
     const [client, server] = Object.values(pair);
     server.accept();
 
-    handleVLESS(server, uuid).catch(() => server.close());
+    vlessHandler(server).catch(() => server.close());
 
     return new Response(null, { status: 101, webSocket: client });
   }
 };
 
-async function handleVLESS(ws, uuid) {
-  let tcpSocket = null;
+async function vlessHandler(ws) {
+  let socket = null;
 
   ws.addEventListener("message", async (event) => {
-    const data = new Uint8Array(event.data);
+    const chunk = new Uint8Array(event.data);
 
-    // أول باكيت = VLESS header
-    if (!tcpSocket) {
-      const parsed = parseVLESS(data, uuid);
-      if (!parsed) {
+    if (!socket) {
+      const req = parseVLESS(chunk);
+      if (!req || req.uuid !== UUID) {
         ws.close();
         return;
       }
 
-      tcpSocket = connect({
-        hostname: parsed.host,
-        port: parsed.port
+      socket = connect({
+        hostname: req.host,
+        port: req.port
       });
 
-      // رد نجاح VLESS
-      ws.send(new Uint8Array([0, 0]));
+      ws.send(new Uint8Array([0, 0])); // VLESS OK response
 
-      pipeSocketToWS(tcpSocket, ws);
-      if (parsed.payload) tcpSocket.write(parsed.payload);
+      pipeRemoteToWS(socket, ws);
+
+      if (req.data && req.data.length > 0) {
+        socket.write(req.data);
+      }
     } else {
-      tcpSocket.write(data);
+      socket.write(chunk);
     }
   });
 
   ws.addEventListener("close", () => {
-    try { tcpSocket?.close(); } catch {}
+    try { socket?.close(); } catch {}
   });
 }
 
-function parseVLESS(buf, uuid) {
-  const id = buf.slice(1, 17);
-  const idStr = formatUUID(id);
-  if (idStr !== uuid) return null;
+function parseVLESS(buf) {
+  if (buf.length < 24) return null;
 
+  const uuid = formatUUID(buf.slice(1, 17));
   const cmd = buf[17];
-  if (cmd !== 1) return null; // TCP فقط
+  if (cmd !== 1) return null; // TCP only
 
   const addrType = buf[19];
   let host = "";
-  let portIndex;
+  let index = 20;
 
   if (addrType === 1) {
-    host = [...buf.slice(20, 24)].join(".");
-    portIndex = 24;
+    host = [...buf.slice(index, index + 4)].join(".");
+    index += 4;
   } else if (addrType === 2) {
-    const len = buf[20];
-    host = new TextDecoder().decode(buf.slice(21, 21 + len));
-    portIndex = 21 + len;
+    const len = buf[index];
+    index += 1;
+    host = new TextDecoder().decode(buf.slice(index, index + len));
+    index += len;
   } else if (addrType === 3) {
-    const data = buf.slice(20, 36);
+    const data = buf.slice(index, index + 16);
     host = [...data].map(x => x.toString(16)).join(":");
-    portIndex = 36;
+    index += 16;
   }
 
-  const port = (buf[portIndex] << 8) + buf[portIndex + 1];
-  const payload = buf.slice(portIndex + 2);
+  const port = (buf[index] << 8) + buf[index + 1];
+  index += 2;
 
-  return { host, port, payload };
+  return {
+    uuid,
+    host,
+    port,
+    data: buf.slice(index)
+  };
 }
 
 function formatUUID(buf) {
-  const hex = [...buf].map(b => b.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
-}
-
-async function pipeSocketToWS(socket, ws) {
-  const reader = socket.readable.getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    ws.send(value);
-  }
-}
+  const hex =
